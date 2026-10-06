@@ -15,7 +15,6 @@ namespace STM32_WL55
         // PROTOCOL CONFIGURATION
         // =====================================================
 
-        private const byte CMD_PING = 0x01;
         private const byte CMD_GET_CFG = 0x02;
         private const byte CMD_SET_CFG = 0x03;
         private const byte CMD_SAVE = 0x04;
@@ -246,13 +245,15 @@ namespace STM32_WL55
         // CONNECT / DISCONNECT
         // =====================================================
 
-        private async void BtnConnect_Click(object sender, EventArgs e)
+        private void BtnConnect_Click(object sender, EventArgs e)
         {
             string portName = cmbPort.Text;
 
             try
             {
-                // Nếu đang kết nối -> Disconnect
+                // =========================================
+                // DISCONNECT
+                // =========================================
                 if (serial.IsOpen)
                 {
                     DisconnectSerial();
@@ -268,9 +269,9 @@ namespace STM32_WL55
                 // =========================================
                 // SERIAL CONFIGURATION
                 // =========================================
-
                 serial.PortName = portName;
-                serial.BaudRate = BAUDRATE;
+
+                serial.BaudRate = BAUDRATE;       // 9600
                 serial.DataBits = 8;
                 serial.Parity = Parity.None;
                 serial.StopBits = StopBits.One;
@@ -289,7 +290,6 @@ namespace STM32_WL55
                 // =========================================
                 // OPEN COM PORT
                 // =========================================
-
                 serial.Open();
 
                 serial.DiscardInBuffer();
@@ -300,49 +300,20 @@ namespace STM32_WL55
                     rxBuffer.Clear();
                 }
 
-                // Cho USB-RS485 ổn định
-                await Task.Delay(300);
-
                 // =========================================
-                // CHECK STM32 CONNECTION
+                // CONNECT SUCCESS
+                // Không kiểm tra PING / PONG nữa
                 // =========================================
+                UpdateConnectionUI();
 
-                hideProtocolLog = true;
-
-                bool connected = await TestConnectionAsync();
-
-                hideProtocolLog = false;
-
-                if (connected)
-                {
-                    UpdateConnectionUI();
-
-                    Log(
-                        "Port " +
-                        serial.PortName +
-                        " connected successfully."
-                    );
-                }
-                else
-                {
-                    if (serial.IsOpen)
-                    {
-                        serial.Close();
-                    }
-
-                    UpdateConnectionUI();
-
-                    Log(
-                        "Port " +
-                        portName +
-                        " connection failed."
-                    );
-                }
+                Log(
+                    "Port " +
+                    serial.PortName +
+                    " connected successfully."
+                );
             }
-            catch
+            catch (Exception ex)
             {
-                hideProtocolLog = false;
-
                 try
                 {
                     if (serial.IsOpen)
@@ -360,6 +331,14 @@ namespace STM32_WL55
                     "Port " +
                     portName +
                     " connection failed."
+                );
+
+                // QUAN TRỌNG: log nguyên nhân thật
+                Log(
+                    "ERROR: " +
+                    ex.GetType().Name +
+                    ": " +
+                    ex.Message
                 );
             }
         }
@@ -461,46 +440,6 @@ namespace STM32_WL55
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information
             );
-        }
-        private async Task<bool> TestConnectionAsync()
-        {
-            try
-            {
-                byte[] response =
-                    await SendRequestAsync(
-                        CMD_PING,
-                        new byte[0],
-                        TIMEOUT_MS,
-                        0
-                    );
-
-                // Expected:
-                // 00 50 4F 4E 47
-                // 00 + "PONG"
-
-                if (response.Length != 5)
-                {
-                    return false;
-                }
-
-                if (response[0] != 0x00)
-                {
-                    return false;
-                }
-
-                string message =
-                    Encoding.ASCII.GetString(
-                        response,
-                        1,
-                        4
-                    );
-
-                return message == "PONG";
-            }
-            catch
-            {
-                return false;
-            }
         }
         // =====================================================
         // GET CONFIG
