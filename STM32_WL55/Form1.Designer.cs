@@ -325,7 +325,7 @@
             this.btnTestAT.Name = "btnTestAT";
             this.btnTestAT.Size = new System.Drawing.Size(75, 23);
             this.btnTestAT.TabIndex = 0;
-            this.btnTestAT.Text = "Test AT";
+            this.btnTestAT.Text = "User Guide";
             this.btnTestAT.UseVisualStyleBackColor = true;
             // 
             // groupBox4

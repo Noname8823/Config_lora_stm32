@@ -47,6 +47,8 @@ namespace STM32_WL55
         // SERIAL PORT
         // =====================================================
 
+        private bool hideProtocolLog = false;
+
         private readonly SerialPort serial = new SerialPort();
 
         private readonly object rxLock = new object();
@@ -115,8 +117,6 @@ namespace STM32_WL55
             btnGetInput.Click += BtnGetInput_Click;
 
 
-            btnTestAT.Text = "Test / PING";
-
             btnSave.Text = "Save Flash";
 
             UpdateConnectionUI();
@@ -146,7 +146,7 @@ namespace STM32_WL55
 
             // TX POWER
             numPower.Minimum = -9;
-            numPower.Maximum = 14;
+            numPower.Maximum = 22;
             numPower.Value = 14;
 
             // FREQUENCY
@@ -248,32 +248,37 @@ namespace STM32_WL55
 
         private async void BtnConnect_Click(object sender, EventArgs e)
         {
+            string portName = cmbPort.Text;
+
             try
             {
+                // Nếu đang kết nối -> Disconnect
                 if (serial.IsOpen)
                 {
                     DisconnectSerial();
-
                     return;
                 }
 
-
-                if (string.IsNullOrWhiteSpace(cmbPort.Text))
+                if (string.IsNullOrWhiteSpace(portName))
                 {
-                    MessageBox.Show("Chưa chọn COM Port.");
-
+                    MessageBox.Show("Please select a COM Port.");
                     return;
                 }
 
+                // =========================================
+                // SERIAL CONFIGURATION
+                // =========================================
 
-                serial.PortName = cmbPort.Text;
+                serial.PortName = portName;
                 serial.BaudRate = BAUDRATE;
                 serial.DataBits = 8;
                 serial.Parity = Parity.None;
                 serial.StopBits = StopBits.One;
                 serial.Handshake = Handshake.None;
+
                 serial.ReadTimeout = 500;
                 serial.WriteTimeout = 1000;
+
                 serial.DtrEnable = false;
                 serial.RtsEnable = false;
 
@@ -281,6 +286,9 @@ namespace STM32_WL55
                 serial.WriteBufferSize = 1024;
                 serial.ReceivedBytesThreshold = 1;
 
+                // =========================================
+                // OPEN COM PORT
+                // =========================================
 
                 serial.Open();
 
@@ -292,25 +300,69 @@ namespace STM32_WL55
                     rxBuffer.Clear();
                 }
 
-                UpdateConnectionUI();
-
-                Log("Connected: " + serial.PortName + " / 9600 8N1");
-
-
-                // Chờ MCU / adapter ổn định rồi mới PING
+                // Cho USB-RS485 ổn định
                 await Task.Delay(300);
 
-                await TestPingAsync();
+                // =========================================
+                // CHECK STM32 CONNECTION
+                // =========================================
+
+                hideProtocolLog = true;
+
+                bool connected = await TestConnectionAsync();
+
+                hideProtocolLog = false;
+
+                if (connected)
+                {
+                    UpdateConnectionUI();
+
+                    Log(
+                        "Port " +
+                        serial.PortName +
+                        " connected successfully."
+                    );
+                }
+                else
+                {
+                    if (serial.IsOpen)
+                    {
+                        serial.Close();
+                    }
+
+                    UpdateConnectionUI();
+
+                    Log(
+                        "Port " +
+                        portName +
+                        " connection failed."
+                    );
+                }
             }
-            catch (Exception ex)
+            catch
             {
-                Log("Connection error: " + ex.Message);
+                hideProtocolLog = false;
+
+                try
+                {
+                    if (serial.IsOpen)
+                    {
+                        serial.Close();
+                    }
+                }
+                catch
+                {
+                }
 
                 UpdateConnectionUI();
+
+                Log(
+                    "Port " +
+                    portName +
+                    " connection failed."
+                );
             }
         }
-
-
         private void DisconnectSerial()
         {
             lock (rxLock)
@@ -375,15 +427,42 @@ namespace STM32_WL55
         // PING
         // =====================================================
 
-        private async void BtnTestAT_Click(object sender, EventArgs e)
+        private void BtnTestAT_Click(object sender, EventArgs e)
         {
-            if (commandLock.CurrentCount == 0) return;
+            string guide =
+                "HƯỚNG DẪN SỬ DỤNG\r\n\r\n" +
 
-            await TestPingAsync();
+                "1. Chọn COM Port.\r\n" +
+                "2. Nhấn Connect để kết nối thiết bị.\r\n\r\n" +
+
+                "GET CONFIG\r\n" +
+                "- Đọc cấu hình hiện tại từ thiết bị.\r\n\r\n" +
+
+                "APPLY\r\n" +
+                "- Áp dụng cấu hình LoRa mới vào RAM.\r\n\r\n" +
+
+                "SAVE FLASH\r\n" +
+                "- Lưu cấu hình vào Flash.\r\n" +
+                "- Thiết bị giữ cấu hình sau khi mất nguồn.\r\n\r\n" +
+
+                "GET INPUT\r\n" +
+                "- Đọc trạng thái IN1, IN2, IN3, IN4.\r\n\r\n" +
+
+                "LƯU Ý\r\n" +
+                "- Các thiết bị muốn liên lạc với nhau phải có cùng:\r\n" +
+                "  Frequency\r\n" +
+                "  Bandwidth\r\n" +
+                "  Spreading Factor\r\n" +
+                "  Coding Rate";
+
+            MessageBox.Show(
+                guide,
+                "Hướng dẫn sử dụng",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
         }
-
-
-        private async Task TestPingAsync()
+        private async Task<bool> TestConnectionAsync()
         {
             try
             {
@@ -392,35 +471,37 @@ namespace STM32_WL55
                         CMD_PING,
                         new byte[0],
                         TIMEOUT_MS,
-                        READ_RETRIES
+                        0
                     );
 
-                /*
-                 * Expected payload: 00 50 4F 4E 47
-                 * 00 = STATUS OK, PONG = ASCII
-                 */
+                // Expected:
+                // 00 50 4F 4E 47
+                // 00 + "PONG"
 
                 if (response.Length != 5)
                 {
-                    throw new Exception("Invalid PING response length.");
+                    return false;
                 }
 
-                string message = Encoding.ASCII.GetString(response, 1, 4);
-
-                if (message != "PONG")
+                if (response[0] != 0x00)
                 {
-                    throw new Exception("Unexpected PING response: " + message);
+                    return false;
                 }
 
-                Log("PING OK PONG");
+                string message =
+                    Encoding.ASCII.GetString(
+                        response,
+                        1,
+                        4
+                    );
+
+                return message == "PONG";
             }
-            catch (Exception ex)
+            catch
             {
-                Log("PING error: " + ex.Message);
+                return false;
             }
         }
-
-
         // =====================================================
         // GET CONFIG
         // =====================================================
@@ -548,8 +629,8 @@ namespace STM32_WL55
                 {
                     DialogResult result =
                         MessageBox.Show(
-                            "Bạn đã kiểm tra RF matching " +
-                            "và anten hỗ trợ tần số này chưa?",
+                             "Have you verified the RF matching network " +
+                            "and confirmed that the antenna supports this frequency?",
                             "RF Frequency Warning",
                             MessageBoxButtons.YesNo,
                             MessageBoxIcon.Warning
@@ -592,10 +673,9 @@ namespace STM32_WL55
                 // SET_CFG: không retry
                 await SendRequestAsync(CMD_SET_CFG, payload, TIMEOUT_MS, 0);
 
-                Log("APPLY OK: Configuration staged in RAM.");
-                Log("Node ID = " + nodeId);
-                Log("Transmission = BROADCAST (0xFF)");
-                Log("Press SAVE FLASH to save configuration.");
+                Log("Configuration applied successfully.");
+                Log("Node ID: " + nodeId + " | Mode: Broadcast");
+                Log("Click SAVE FLASH to save the configuration.");
             }
             catch (Exception ex)
             {
@@ -622,7 +702,7 @@ namespace STM32_WL55
             {
                 DialogResult result =
                     MessageBox.Show(
-                        "Lưu cấu hình vào Flash và khởi động lại STM32?",
+                        "Save the configuration to Flash and restart the device?",
                         "Save Configuration",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Question
@@ -642,17 +722,19 @@ namespace STM32_WL55
 
                 try
                 {
-                    // REBOOT: không retry
-                    await SendRequestAsync(CMD_REBOOT, new byte[0], TIMEOUT_MS, 0);
-
-                    Log("REBOOT acknowledged.");
+                    await SendRequestAsync(
+                        CMD_REBOOT,
+                        new byte[0],
+                        TIMEOUT_MS,
+                        0
+                    );
                 }
                 catch (TimeoutException)
                 {
-                    Log("Reboot response timeout. STM32 may already be restarting.");
+                    // Device may already be restarting.
                 }
 
-                Log("Wait for reboot, then press GET CONFIG.");
+                Log("Please click GET CONFIG to verify the saved configuration.");
             }
             catch (Exception ex)
             {
@@ -788,7 +870,10 @@ namespace STM32_WL55
 
             try
             {
-                Log("TX: " + ToHex(frame));
+                if (!hideProtocolLog)
+                {
+                   // Log("TX: " + ToHex(frame));
+                }
 
                 // Ghi ở thread pool, không chặn UI
                 await Task.Run(() => serial.Write(frame, 0, frame.Length));
@@ -1071,7 +1156,10 @@ namespace STM32_WL55
 
                 rxBuffer.RemoveRange(0, total);
 
-                Log("RX: " + ToHex(frame));
+                if (!hideProtocolLog)
+                {
+                  //  Log("RX: " + ToHex(frame));
+                }
 
                 byte command = frame[4];
 
